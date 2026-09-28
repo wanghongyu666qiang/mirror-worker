@@ -63,7 +63,7 @@ jobs:
             echo "$REPO_FILTER" > targets.txt
           else
             gh api "/user/repos" --paginate \
-              --jq '.[] | select(.fork == false and .archived == false) | .full_name' \
+              --jq '.[] | select(.fork == false and .archived == false and .private == false) | .full_name' \
               > targets.txt
           fi
           echo "Targets:"
@@ -102,7 +102,7 @@ jobs:
             if gitee_refs_raw="$(git ls-remote "$target" 2>&1)"; then
               gitee_refs="$(printf '%s\n' "$gitee_refs_raw" | refs_only)"
             else
-              echo "::notice title=Gitee repo missing::${gpath} - create it on Gitee manually, visibility should match ${repo}"
+              echo "::notice title=Gitee repo missing::${gpath} - create it as a public repo on Gitee to mirror it"
               missing=$((missing + 1))
               continue
             fi
