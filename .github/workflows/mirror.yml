@@ -25,6 +25,7 @@ jobs:
 
     env:
       GIT_TERMINAL_PROMPT: "0"
+      GITEE_API: https://gitee.com/api/v5
 
     steps:
       - name: Check out this repository
@@ -72,6 +73,8 @@ jobs:
       - name: Mirror each repo
         env:
           GITEE_NAMESPACE: ${{ vars.GITEE_NAMESPACE }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           refs_only() {
             awk -F'\t' 'index($2, "^") == 0 && ($2 ~ /^refs\/heads\// || $2 ~ /^refs\/tags\//) {print $1, $2}'
@@ -81,6 +84,7 @@ jobs:
           pushed=0
           skipped=0
           excluded=0
+          created=0
           while IFS= read -r repo; do
             [ -n "$repo" ] || continue
             name="${repo##*/}"
@@ -93,18 +97,38 @@ jobs:
             [ -f gitee-map.txt ] && gpath="$(awk -F= -v k="$name" '$1==k {print $2; exit}' gitee-map.txt)"
             [ -n "$gpath" ] || gpath="$name"
             target="https://gitee.com/${GITEE_NAMESPACE}/${gpath}.git"
-            if ! gitee_refs_raw="$(git ls-remote "$target" 2>&1)"; then
-              echo "::notice title=Gitee repo unavailable::${gpath} - $(printf '%s' "$gitee_refs_raw" | tr -d '\r' | head -1)"
-              missing=$((missing + 1))
-              continue
-            fi
             if ! gh_refs_raw="$(git ls-remote "https://github.com/${repo}.git" 2>&1)"; then
-              echo "::error title=GitHub unreachable::${repo} - $(printf '%s' "$gh_refs_raw" | tr -d '\r' | head -1)"
+              echo "::error title=GitHub unreachable::${repo} - $(printf '%s' "$gh_refs_raw" | tr -d '\r\n' | head -c 200)"
               failed=$((failed + 1))
               continue
             fi
             gh_refs="$(printf '%s\n' "$gh_refs_raw" | refs_only)"
-            gitee_refs="$(printf '%s\n' "$gitee_refs_raw" | refs_only)"
+            if gitee_refs_raw="$(git ls-remote "$target" 2>&1)"; then
+              gitee_refs="$(printf '%s\n' "$gitee_refs_raw" | refs_only)"
+            else
+              gitee_refs=""
+              if [ "$(gh api "/repos/${repo}" --jq .private 2>/dev/null)" != "false" ]; then
+                echo "::notice title=Gitee repo missing::${gpath} - source is private, create it on Gitee manually"
+                missing=$((missing + 1))
+                continue
+              fi
+              echo "=== creating gitee/${GITEE_NAMESPACE}/${gpath}"
+              resp="$(curl -sS -X POST "${GITEE_API}/user/repos" \
+                --data-urlencode "access_token=${GITEE_TOKEN}" \
+                --data-urlencode "name=${gpath}" \
+                --data-urlencode "public=true" \
+                --data-urlencode "private=false" \
+                --data-urlencode "description=Mirror of https://github.com/${repo}")"
+              html_url="$(printf '%s' "$resp" | jq -r '.html_url // empty')"
+              resp_private="$(printf '%s' "$resp" | jq -r '.private')"
+              if [ "$html_url" != "https://gitee.com/${GITEE_NAMESPACE}/${gpath}" ] ||
+                 [ "$resp_private" != "false" ]; then
+                echo "::error title=Refusing to push::${gpath} resolved as '${html_url}' private='${resp_private}' | $(printf '%s' "$resp" | tr -d '\r\n' | head -c 200)"
+                failed=$((failed + 1))
+                continue
+              fi
+              created=$((created + 1))
+            fi
             if [ "$gh_refs" = "$gitee_refs" ]; then
               echo "${repo}: up to date ($(printf '%s\n' "$gh_refs" | wc -l) refs)"
               skipped=$((skipped + 1))
@@ -121,5 +145,5 @@ jobs:
               failed=$((failed + 1))
             fi
           done < targets.txt
-          echo "pushed=${pushed} skipped=${skipped} excluded=${excluded} missing=${missing} failed=${failed}"
+          echo "pushed=${pushed} created=${created} skipped=${skipped} excluded=${excluded} missing=${missing} failed=${failed}"
           [ "$failed" -eq 0 ]
