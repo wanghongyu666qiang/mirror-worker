@@ -116,9 +116,9 @@ jobs:
               resp="$(curl -sS -X POST "${GITEE_API}/user/repos" \
                 --data-urlencode "access_token=${GITEE_TOKEN}" \
                 --data-urlencode "name=${gpath}" \
-                --data-urlencode "private=false" \
+                --data-urlencode "private=0" \
                 --data-urlencode "description=Mirror of https://github.com/${repo}")"
-              html_url="$(printf '%s' "$resp" | jq -r '.html_url // empty')"
+              html_url="$(printf '%s' "$resp" | jq -r '.html_url // empty' | sed 's/\.git$//')"
               resp_private="$(printf '%s' "$resp" | jq -r '.private')"
               if [ "$html_url" != "https://gitee.com/${GITEE_NAMESPACE}/${gpath}" ] ||
                  [ "$resp_private" != "false" ]; then
