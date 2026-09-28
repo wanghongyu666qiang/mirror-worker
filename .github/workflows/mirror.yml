@@ -27,6 +27,9 @@ jobs:
       GIT_TERMINAL_PROMPT: "0"
 
     steps:
+      - name: Check out this repository
+        uses: actions/checkout@v4
+
       - name: Check required secrets and variables
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
@@ -76,9 +79,12 @@ jobs:
           while IFS= read -r repo; do
             [ -n "$repo" ] || continue
             name="${repo##*/}"
-            target="https://gitee.com/${GITEE_NAMESPACE}/${name}.git"
+            gpath=""
+            [ -f gitee-map.txt ] && gpath="$(awk -F= -v k="$name" '$1==k {print $2; exit}' gitee-map.txt)"
+            [ -n "$gpath" ] || gpath="$name"
+            target="https://gitee.com/${GITEE_NAMESPACE}/${gpath}.git"
             if ! git ls-remote "$target" >/dev/null 2>&1; then
-              echo "::notice title=Gitee repo unavailable::${name} - not found or credentials rejected"
+              echo "::notice title=Gitee repo unavailable::${gpath} - not found or credentials rejected"
               missing=$((missing + 1))
               continue
             fi
