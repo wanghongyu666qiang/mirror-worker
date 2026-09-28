@@ -116,7 +116,6 @@ jobs:
               resp="$(curl -sS -X POST "${GITEE_API}/user/repos" \
                 --data-urlencode "access_token=${GITEE_TOKEN}" \
                 --data-urlencode "name=${gpath}" \
-                --data-urlencode "public=true" \
                 --data-urlencode "private=false" \
                 --data-urlencode "description=Mirror of https://github.com/${repo}")"
               html_url="$(printf '%s' "$resp" | jq -r '.html_url // empty')"
