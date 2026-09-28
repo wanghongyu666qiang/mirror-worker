@@ -1,0 +1,97 @@
+name: Mirror GitHub repos to Gitee
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "只镜像这一个 owner/name，留空则遍历全部仓库"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-to-gitee
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: Mirror to Gitee
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      GIT_TERMINAL_PROMPT: "0"
+
+    steps:
+      - name: Check required secrets and variables
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_NAMESPACE: ${{ vars.GITEE_NAMESPACE }}
+        run: |
+          [ -n "$GH_PAT" ] || { echo "secret GH_PAT is not set" >&2; exit 1; }
+          [ -n "$GITEE_TOKEN" ] || { echo "secret GITEE_TOKEN is not set" >&2; exit 1; }
+          [ -n "$GITEE_NAMESPACE" ] || { echo "variable GITEE_NAMESPACE is not set" >&2; exit 1; }
+
+      - name: Install git credentials
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_USER: ${{ vars.GITEE_NAMESPACE }}
+        run: |
+          echo "::add-mask::$GH_PAT"
+          echo "::add-mask::$GITEE_TOKEN"
+          umask 077
+          git config --global credential.helper store
+          printf '%s\n%s\n' \
+            "https://x-access-token:${GH_PAT}@github.com" \
+            "https://${GITEE_USER}:${GITEE_TOKEN}@gitee.com" > ~/.git-credentials
+
+      - name: Build target list
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPO_FILTER: ${{ github.event.inputs.repo }}
+        run: |
+          if [ -n "$REPO_FILTER" ]; then
+            echo "$REPO_FILTER" > targets.txt
+          else
+            gh api "/user/repos" --paginate \
+              --jq '.[] | select(.fork == false and .archived == false) | .full_name' \
+              > targets.txt
+          fi
+          echo "Targets:"
+          sed 's/^/  /' targets.txt
+
+      - name: Mirror each repo
+        env:
+          GITEE_NAMESPACE: ${{ vars.GITEE_NAMESPACE }}
+        run: |
+          missing=0
+          failed=0
+          pushed=0
+          while IFS= read -r repo; do
+            [ -n "$repo" ] || continue
+            name="${repo##*/}"
+            target="https://gitee.com/${GITEE_NAMESPACE}/${name}.git"
+            if ! git ls-remote "$target" >/dev/null 2>&1; then
+              echo "::notice title=Gitee repo unavailable::${name} - not found or credentials rejected"
+              missing=$((missing + 1))
+              continue
+            fi
+            echo "=== ${repo} -> ${target}"
+            rm -rf mirror.git
+            if git clone --bare -q "https://github.com/${repo}.git" mirror.git &&
+               git -C mirror.git push --mirror -q "$target"; then
+              echo "    ok"
+              pushed=$((pushed + 1))
+            else
+              echo "::error title=Mirror failed::${repo}"
+              failed=$((failed + 1))
+            fi
+          done < targets.txt
+          echo "pushed=${pushed} missing=${missing} failed=${failed}"
+          [ "$failed" -eq 0 ]
