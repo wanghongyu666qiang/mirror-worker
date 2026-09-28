@@ -2,7 +2,7 @@ name: Mirror GitHub repos to Gitee
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "0 * * * *"
   workflow_dispatch:
     inputs:
       repo:
@@ -80,9 +80,15 @@ jobs:
           failed=0
           pushed=0
           skipped=0
+          excluded=0
           while IFS= read -r repo; do
             [ -n "$repo" ] || continue
             name="${repo##*/}"
+            if [ -f gitee-skip.txt ] && grep -qxF -e "$name" gitee-skip.txt; then
+              echo "${repo}: excluded by gitee-skip.txt"
+              excluded=$((excluded + 1))
+              continue
+            fi
             gpath=""
             [ -f gitee-map.txt ] && gpath="$(awk -F= -v k="$name" '$1==k {print $2; exit}' gitee-map.txt)"
             [ -n "$gpath" ] || gpath="$name"
@@ -115,5 +121,5 @@ jobs:
               failed=$((failed + 1))
             fi
           done < targets.txt
-          echo "pushed=${pushed} skipped=${skipped} missing=${missing} failed=${failed}"
+          echo "pushed=${pushed} skipped=${skipped} excluded=${excluded} missing=${missing} failed=${failed}"
           [ "$failed" -eq 0 ]
