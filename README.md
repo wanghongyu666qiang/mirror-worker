@@ -62,6 +62,8 @@ gh variable set GITEE_NAMESPACE --repo wanghongyu666qiang/mirror-worker --body "
 - **私有仓不镜像**（已定案）。另外当前 `GH_PAT` 能列出私有仓但读不到其内容（`git ls-remote` 回 `Repository not found`，像是 fine-grained 令牌缺 `Contents: Read-only`），要镜像私有仓得先修权限。
 - **`--mirror` 是强制覆盖**：Gitee 上任何 GitHub 没有的分支会被删除，Gitee 侧不要有独立提交。
 - **Release 附件（exe/zip）不同步**，Gitee 上只有代码和 tag。
+- **跨境推送可能极慢甚至停滞**：codex_deepseekpet（86MB）曾挂 59 分钟无进展（2026-10-31 实测）。防护：`http.lowSpeedLimit=1024 / lowSpeedTime=120`（低于 1KB/s 持续 120 秒即中止）、单仓库 `timeout`（克隆 15 分 / 推送 45 分），job 上限 360 分钟；被中止的仓库下一轮自动重推。
+- **Gitee 仓库名规则**：必须以字母/数字/点开头，`---obsidian-rag-` 这类名字建库直接 422，需在 `gitee-map.txt` 映射成合法路径（已映射为 `obsidian-rag`）。
 - **耗时与配额**：真推一次 AskBridge 约 7 分 19 秒（47MB，跨境）；全量空转约 34 秒。本仓库 2026-10-31 起改为**公开仓**，Actions 分钟数免费不限量，不再有配额问题（顺带绕开了账户账单问题对私有仓 Actions 的封锁）。
 - **Gitee 空仓库的默认分支记的是 `master`**，而镜像只有 `main`。因无更新仓库的 API（见上），只能网页端 管理→分支设置 改成 `main`。
 
