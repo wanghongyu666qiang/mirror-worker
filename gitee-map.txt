@@ -1,1 +1,2 @@
+---obsidian-rag-=obsidian-rag
 AskBridge=ask-bridge
