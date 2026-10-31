@@ -21,7 +21,7 @@ jobs:
   mirror:
     name: Mirror to Gitee
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 360
 
     env:
       GIT_TERMINAL_PROMPT: "0"
@@ -50,6 +50,9 @@ jobs:
           echo "::add-mask::$GITEE_TOKEN"
           umask 077
           git config --global credential.helper store
+          # 跨境推送可能停滞: 120 秒内速度低于 1KB/s 直接中止, 避免无限挂起
+          git config --global http.lowSpeedLimit 1024
+          git config --global http.lowSpeedTime 120
           printf '%s\n%s\n' \
             "https://x-access-token:${GH_PAT}@github.com" \
             "https://${GITEE_USER}:${GITEE_TOKEN}@gitee.com" > ~/.git-credentials
@@ -160,8 +163,8 @@ jobs:
             fi
             echo "=== ${repo} -> ${target}"
             rm -rf mirror.git
-            if git clone --bare -q "https://github.com/${repo}.git" mirror.git &&
-               git -C mirror.git push --mirror -q "$target"; then
+            if timeout 900 git clone --bare --progress "https://github.com/${repo}.git" mirror.git &&
+               timeout 2700 git -C mirror.git push --mirror --progress "$target"; then
               echo "    ok"
               pushed=$((pushed + 1))
             else
