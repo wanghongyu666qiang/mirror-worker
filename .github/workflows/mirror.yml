@@ -164,7 +164,7 @@ jobs:
             echo "=== ${repo} -> ${target}"
             rm -rf mirror.git
             if timeout 900 git clone --bare --progress "https://github.com/${repo}.git" mirror.git &&
-               timeout 2700 git -C mirror.git push --mirror --progress "$target"; then
+               timeout 7200 git -C mirror.git push --mirror --progress "$target"; then
               echo "    ok"
               pushed=$((pushed + 1))
             else
