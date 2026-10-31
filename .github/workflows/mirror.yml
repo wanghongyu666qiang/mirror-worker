@@ -72,17 +72,63 @@ jobs:
       - name: Mirror each repo
         env:
           GITEE_NAMESPACE: ${{ vars.GITEE_NAMESPACE }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
           refs_only() {
             awk -F'\t' 'index($2, "^") == 0 && ($2 ~ /^refs\/heads\// || $2 ~ /^refs\/tags\//) {print $1, $2}'
           }
+          gitee_api="https://gitee.com/api/v5"
+          gitee_create() {
+            # $1 = Gitee 上的仓库名, $2 = 源仓库 (GitHub owner/name)
+            local gpath="$1" src="$2" url code body msg
+            if curl -fsS -o /dev/null --max-time 15 "${gitee_api}/orgs/${GITEE_NAMESPACE}?access_token=${GITEE_TOKEN}"; then
+              url="${gitee_api}/orgs/${GITEE_NAMESPACE}/repos"
+            elif curl -fsS -o /dev/null --max-time 15 "${gitee_api}/users/${GITEE_NAMESPACE}?access_token=${GITEE_TOKEN}"; then
+              url="${gitee_api}/user/repos"
+            else
+              echo "create ${gpath}: namespace ${GITEE_NAMESPACE} not found on Gitee"
+              return 1
+            fi
+            body="$(mktemp)"
+            code="$(curl -sS -o "$body" -w '%{http_code}' --max-time 30 -X POST "$url" \
+              --data-urlencode "access_token=${GITEE_TOKEN}" \
+              --data-urlencode "name=${gpath}" \
+              --data-urlencode "private=false" \
+              --data-urlencode "auto_init=false" \
+              --data-urlencode "description=Mirror of https://github.com/${src}")" || code="000"
+            msg="$(head -c 400 "$body" | tr -d '\r\n')"
+            rm -f "$body"
+            echo "create ${gpath}: HTTP ${code} ${msg}"
+            [ "$code" = "201" ] || [ "$code" = "200" ]
+          }
+          gitee_repo_flag() {
+            # $1 = Gitee 仓库名, $2 = 要看的 JSON 字段 (如 private) → 输出字段值, 查询失败输出空
+            local gpath="$1" flag="$2" body
+            body="$(curl -fsS --max-time 20 "${gitee_api}/repos/${GITEE_NAMESPACE}/${gpath}?access_token=${GITEE_TOKEN}" 2>/dev/null)" || return 1
+            printf '%s' "$body" | grep -o "\"${flag}\":[a-z0-9\"]*" | head -1 | cut -d: -f2 | tr -d '"'
+          }
+          gitee_update() {
+            # $1 = Gitee 仓库名, 其余为额外的 --data-urlencode 参数
+            local gpath="$1" code body msg
+            shift
+            body="$(mktemp)"
+            code="$(curl -sS -o "$body" -w '%{http_code}' --max-time 20 -X PUT "${gitee_api}/repos/${GITEE_NAMESPACE}/${gpath}" \
+              --data-urlencode "access_token=${GITEE_TOKEN}" "$@")" || code="000"
+            msg="$(head -c 300 "$body" | tr -d '\r\n')"
+            rm -f "$body"
+            echo "update ${gpath}: HTTP ${code} ${msg}"
+            [ "$code" = "200" ]
+          }
           missing=0
+          created=0
+          private_created=0
           failed=0
           pushed=0
           skipped=0
           excluded=0
           while IFS= read -r repo; do
             [ -n "$repo" ] || continue
+            just_created=0
             name="${repo##*/}"
             if [ -f gitee-skip.txt ] && grep -qxF -e "$name" gitee-skip.txt; then
               echo "${repo}: excluded by gitee-skip.txt"
@@ -99,12 +145,32 @@ jobs:
               continue
             fi
             gh_refs="$(printf '%s\n' "$gh_refs_raw" | refs_only)"
+            gh_head_branch="$(printf '%s\n' "$gh_refs_raw" | awk -F'\t' '$2 == "HEAD" {print $1}' | sed 's|^ref: refs/heads/||' | head -1)"
             if gitee_refs_raw="$(git ls-remote "$target" 2>&1)"; then
               gitee_refs="$(printf '%s\n' "$gitee_refs_raw" | refs_only)"
             else
-              echo "::notice title=Gitee repo missing::${gpath} - create it as a public repo on Gitee to mirror it"
-              missing=$((missing + 1))
-              continue
+              echo "::notice title=Gitee repo missing, auto-creating::${gpath}"
+              gitee_create "$gpath" "$repo" || true
+              sleep 2
+              if gitee_refs_raw="$(git ls-remote "$target" 2>&1)"; then
+                gitee_refs="$(printf '%s\n' "$gitee_refs_raw" | refs_only)"
+                created=$((created + 1))
+                just_created=1
+                if [ "$(gitee_repo_flag "$gpath" private)" = "true" ]; then
+                  echo "    created as PRIVATE on Gitee, trying to flip to public"
+                  gitee_update "$gpath" --data-urlencode "private=false" || true
+                  if [ "$(gitee_repo_flag "$gpath" private)" = "true" ]; then
+                    echo "::warning title=Still private on Gitee::${gpath} - 自动转公开失败, 请到 Gitee 网页端 管理→基本信息 手动转为公开"
+                    private_created=$((private_created + 1))
+                  else
+                    echo "    flipped to public"
+                  fi
+                fi
+              else
+                echo "::error title=Gitee repo unavailable::${gpath} - auto-create failed (GITEE_TOKEN needs projects scope) or repo name is invalid on Gitee; create it manually as a public repo"
+                missing=$((missing + 1))
+                continue
+              fi
             fi
             if [ "$gh_refs" = "$gitee_refs" ]; then
               echo "${repo}: up to date ($(printf '%s\n' "$gh_refs" | wc -l) refs)"
@@ -117,10 +183,13 @@ jobs:
                git -C mirror.git push --mirror -q "$target"; then
               echo "    ok"
               pushed=$((pushed + 1))
+              if [ "$just_created" = 1 ] && [ -n "$gh_head_branch" ]; then
+                gitee_update "$gpath" --data-urlencode "default_branch=${gh_head_branch}" || true
+              fi
             else
               echo "::error title=Mirror failed::${repo}"
               failed=$((failed + 1))
             fi
           done < targets.txt
-          echo "pushed=${pushed} skipped=${skipped} excluded=${excluded} missing=${missing} failed=${failed}"
+          echo "pushed=${pushed} created=${created} private_created=${private_created} skipped=${skipped} excluded=${excluded} missing=${missing} failed=${failed}"
           [ "$failed" -eq 0 ]
